@@ -37,10 +37,17 @@ Observe the following `subtypes` defined:
 
 They will ensure that the policy is only run when the input to such a policy contains an `RDS` instance. 
 
-## Required fields
-For input selectors to work, the following fields are required to be specified per misconfiguration type
+## Enabling selectors and subtypes
+Currently, the following selectors are supported:
 
-| Type                     | Subtype fields required | Example                         | 
+1. Cloud `type: cloud`
+2. Kubernetes `type: kubernetes`
+3. Dockerfile `type: dockerfile`
+
+
+The following selectors also support the corresponding subtypes:
+
+| Type                     | Subtype fields required | Example                         |
 |--------------------------|-------------------------|---------------------------------|
 | Cloud (AWS, Azure, etc.) | `provider`, `service`   | `provider: aws`, `service: rds` |
 
