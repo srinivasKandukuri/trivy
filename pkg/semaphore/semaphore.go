@@ -2,7 +2,7 @@ package semaphore
 
 import "golang.org/x/sync/semaphore"
 
-const defaultSize = 5
+const defaultSize = 12
 
 type options struct {
 	size int64

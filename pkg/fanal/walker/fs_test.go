@@ -77,7 +77,7 @@ func TestDir_Walk(t *testing.T) {
 					return nil
 				},
 			},
-			analyzeFn: func(filePath string, info os.FileInfo, opener analyzer.Opener) error {
+			analyzeFn: func(string, os.FileInfo, analyzer.Opener) error {
 				// Ignore errors
 				return nil
 			},
