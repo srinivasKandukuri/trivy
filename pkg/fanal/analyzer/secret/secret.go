@@ -4,14 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/samber/lo"
+	"golang.org/x/xerrors"
 	"io"
 	"os"
-	"path/filepath"
-	"strings"
-
-	"github.com/samber/lo"
-	"golang.org/x/exp/slices"
-	"golang.org/x/xerrors"
 
 	"github.com/aquasecurity/trivy/pkg/fanal/analyzer"
 	"github.com/aquasecurity/trivy/pkg/fanal/secret"
@@ -114,42 +110,42 @@ func (a *SecretAnalyzer) Analyze(_ context.Context, input analyzer.AnalysisInput
 
 func (a *SecretAnalyzer) Required(filePath string, fi os.FileInfo) bool {
 	// Skip small files
-	if fi.Size() < 10 {
-		return false
-	}
+	//if fi.Size() < 10 {
+	//	return false
+	//}
+	//
+	//dir, fileName := filepath.Split(filePath)
+	//dir = filepath.ToSlash(dir)
+	//dirs := strings.Split(dir, "/")
+	//
+	//// Check if the directory should be skipped
+	//for _, skipDir := range skipDirs {
+	//	if slices.Contains(dirs, skipDir) {
+	//		return false
+	//	}
+	//}
+	//
+	//// Check if the file should be skipped
+	//if slices.Contains(skipFiles, fileName) {
+	//	return false
+	//}
+	//
+	//// Skip the config file for secret scanning
+	//if filepath.Base(a.configPath) == filePath {
+	//	return false
+	//}
+	//
+	//// Check if the file extension should be skipped
+	//ext := filepath.Ext(fileName)
+	//if slices.Contains(skipExts, ext) {
+	//	return false
+	//}
+	//
+	//if a.scanner.AllowPath(filePath) {
+	//	return false
+	//}
 
-	dir, fileName := filepath.Split(filePath)
-	dir = filepath.ToSlash(dir)
-	dirs := strings.Split(dir, "/")
-
-	// Check if the directory should be skipped
-	for _, skipDir := range skipDirs {
-		if slices.Contains(dirs, skipDir) {
-			return false
-		}
-	}
-
-	// Check if the file should be skipped
-	if slices.Contains(skipFiles, fileName) {
-		return false
-	}
-
-	// Skip the config file for secret scanning
-	if filepath.Base(a.configPath) == filePath {
-		return false
-	}
-
-	// Check if the file extension should be skipped
-	ext := filepath.Ext(fileName)
-	if slices.Contains(skipExts, ext) {
-		return false
-	}
-
-	if a.scanner.AllowPath(filePath) {
-		return false
-	}
-
-	return true
+	return false
 }
 
 func (a *SecretAnalyzer) Type() analyzer.Type {

@@ -41,6 +41,7 @@ type Option struct {
 
 	// File walk
 	WalkOption walker.Option
+	SkScan     bool
 }
 
 func (o *Option) Sort() {

@@ -3,17 +3,17 @@ package image
 import (
 	"context"
 	"errors"
+	"fmt"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"github.com/samber/lo"
+	"golang.org/x/exp/slices"
 	"golang.org/x/sync/semaphore"
+	"golang.org/x/xerrors"
 	"io"
 	"os"
 	"reflect"
 	"strings"
 	"sync"
-
-	v1 "github.com/google/go-containerregistry/pkg/v1"
-	"github.com/samber/lo"
-	"golang.org/x/exp/slices"
-	"golang.org/x/xerrors"
 
 	"github.com/aquasecurity/trivy/pkg/fanal/analyzer"
 	"github.com/aquasecurity/trivy/pkg/fanal/artifact"
@@ -36,6 +36,9 @@ type Artifact struct {
 
 	artifactOption artifact.Option
 }
+
+const EmptyLayer = "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
+const EmptyZip = "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
 
 type LayerInfo struct {
 	DiffID    string
@@ -85,6 +88,7 @@ func NewArtifact(img types.Image, c cache.ArtifactCache, opt artifact.Option) (a
 }
 
 func (a Artifact) Inspect(ctx context.Context) (types.ArtifactReference, error) {
+	//fmt.Println("******** sk-log-Group inspect start here ****** :", a.artifactOption.AnalyzerGroup, ", Image :", a.image.Name())
 	imageID, err := a.image.ID()
 	if err != nil {
 		return types.ArtifactReference{}, xerrors.Errorf("unable to get the image ID: %w", err)
@@ -119,14 +123,23 @@ func (a Artifact) Inspect(ctx context.Context) (types.ArtifactReference, error) 
 	if err != nil {
 		return types.ArtifactReference{}, err
 	}
+	//fmt.Println(a.artifactOption.AnalyzerGroup)
+	//fmt.Println("Image : ", a.image.Name())
+	//tm := time.Now()
+	//fmt.Println("sk-log-Group :", a.artifactOption.AnalyzerGroup, ", Image :", a.image.Name())
 
 	// Parse histories and extract a list of "created_by"
 	layerKeyMap := a.consolidateCreatedBy(diffIDs, layerKeys, configFile)
-
-	missingImage, missingLayers, err := a.cache.MissingBlobs(imageKey, layerKeys)
-	if err != nil {
-		return types.ArtifactReference{}, xerrors.Errorf("unable to get missing layers: %w", err)
+	//missingImage, missingLayers := true, layerKeys
+	missingImage, missingLayers := true, layerKeys
+	if a.artifactOption.SkScan {
+		missingImage, missingLayers, err = a.cache.MissingBlobs(imageKey, layerKeys)
+		if err != nil {
+			return types.ArtifactReference{}, xerrors.Errorf("unable to get missing layers: %w", err)
+		}
 	}
+	//fmt.Println("sk-log-Group :", a.artifactOption.AnalyzerGroup, ", Image :", a.image.Name(), ": Missing Blob endtime microseconds --", time.Since(tm).Microseconds())
+	//fmt.Println("Imagekey : ", imageKey, " : Missing Blob endtime microseconds --", time.Since(tm).Microseconds())
 
 	missingImageKey := imageKey
 	if missingImage {
@@ -215,9 +228,15 @@ func (a Artifact) inspect(ctx context.Context, missingImage string, layerKeys, b
 	layerKeyMap map[string]LayerInfo, configFile *v1.ConfigFile) error {
 
 	var osFound types.OS
-	workers := lo.Ternary(a.artifactOption.Parallel > 0, a.artifactOption.Parallel, 5)
+	workers := len(layerKeys) //lo.Ternary(a.artifactOption.Parallel > 0, a.artifactOption.Parallel, len(layerKeys))
+	//fmt.Println("Parallel workers count :", workers)
+	//tm := time.Now()
+	//fmt.Println("Imagekey : ", missingImage, " : Walk starttime : ", tm)
 	p := parallel.NewPipeline(workers, false, layerKeys, func(ctx context.Context, layerKey string) (any, error) {
 		layer := layerKeyMap[layerKey]
+		if layerKey == EmptyLayer || layerKey == EmptyZip {
+			return nil, nil
+		}
 
 		// If it is a base layer, secret scanning should not be performed.
 		var disabledAnalyzers []analyzer.Type
@@ -225,15 +244,21 @@ func (a Artifact) inspect(ctx context.Context, missingImage string, layerKeys, b
 			disabledAnalyzers = append(disabledAnalyzers, analyzer.TypeSecret)
 		}
 
-		layerInfo, err := a.inspectLayer(ctx, layer, disabledAnalyzers)
-		if err != nil {
-			return nil, xerrors.Errorf("failed to analyze layer (%s): %w", layer.DiffID, err)
-		}
-		if err = a.cache.PutBlob(layerKey, layerInfo); err != nil {
-			return nil, xerrors.Errorf("failed to store layer: %s in cache: %w", layerKey, err)
-		}
-		if lo.IsNotEmpty(layerInfo.OS) {
-			osFound = layerInfo.OS
+		if a.artifactOption.SkScan {
+			layerInfo, err := a.inspectLayer(ctx, layer, disabledAnalyzers)
+			if err != nil {
+				return nil, xerrors.Errorf("failed to analyze layer (%s): %w", layer.DiffID, err)
+			}
+
+			if err = a.cache.PutBlob(layerKey, layerInfo); err != nil {
+				return nil, xerrors.Errorf("failed to store layer: %s in cache: %w", layerKey, err)
+			}
+
+			if lo.IsNotEmpty(layerInfo.OS) {
+				osFound = layerInfo.OS
+			}
+		} else {
+			fmt.Println("skipping inspectlayer :", layer.DiffID, ",  ", a.artifactOption.AnalyzerGroup, ", Image :", a.image.Name())
 		}
 		return nil, nil
 
@@ -248,7 +273,8 @@ func (a Artifact) inspect(ctx context.Context, missingImage string, layerKeys, b
 			return xerrors.Errorf("unable to analyze config: %w", err)
 		}
 	}
-
+	//fmt.Println("******** sk-log-Group inspect ends here ****** :", a.artifactOption.AnalyzerGroup, ", Image :", a.image.Name())
+	//fmt.Println("sk-log-Group :", a.artifactOption.AnalyzerGroup, ", Image :", a.image.Name(), ": Walk endtime milliseconds --", time.Since(tm).Seconds())
 	return nil
 }
 
@@ -268,7 +294,8 @@ func (a Artifact) inspectLayer(ctx context.Context, layerInfo LayerInfo, disable
 		FileChecksum: a.artifactOption.FileChecksum,
 	}
 	result := analyzer.NewAnalysisResult()
-	parallel := lo.Ternary(a.artifactOption.Parallel > 0, a.artifactOption.Parallel, 5)
+	parallel := 12 //lo.Ternary(a.artifactOption.Parallel > 0, a.artifactOption.Parallel, 12)
+	//fmt.Println("Parallel Goroutines count :", parallel)
 	limit := semaphore.NewWeighted(int64(parallel))
 
 	// Prepare filesystem for post analysis
@@ -280,25 +307,26 @@ func (a Artifact) inspectLayer(ctx context.Context, layerInfo LayerInfo, disable
 
 	// Walk a tar layer
 	opqDirs, whFiles, err := a.walker.Walk(rc, func(filePath string, info os.FileInfo, opener analyzer.Opener) error {
-		if err = a.analyzer.AnalyzeFile(ctx, &wg, limit, result, "", filePath, info, opener, disabled, opts); err != nil {
-			return xerrors.Errorf("failed to analyze %s: %w", filePath, err)
-		}
+		if a.artifactOption.SkScan {
+			if err = a.analyzer.AnalyzeFile(ctx, &wg, limit, result, "", filePath, info, opener, disabled, opts); err != nil {
+				return xerrors.Errorf("failed to analyze %s: %w", filePath, err)
+			}
 
-		// Skip post analysis if the file is not required
-		analyzerTypes := a.analyzer.RequiredPostAnalyzers(filePath, info)
-		if len(analyzerTypes) == 0 {
-			return nil
-		}
+			// Skip post analysis if the file is not required
+			analyzerTypes := a.analyzer.RequiredPostAnalyzers(filePath, info)
+			if len(analyzerTypes) == 0 {
+				return nil
+			}
 
-		// Build filesystem for post analysis
-		tmpFilePath, err := composite.CopyFileToTemp(opener, info)
-		if err != nil {
-			return xerrors.Errorf("failed to copy file to temp: %w", err)
+			// Build filesystem for post analysis
+			tmpFilePath, err := composite.CopyFileToTemp(opener, info)
+			if err != nil {
+				return xerrors.Errorf("failed to copy file to temp: %w", err)
+			}
+			if err = composite.CreateLink(analyzerTypes, "", filePath, tmpFilePath); err != nil {
+				return xerrors.Errorf("failed to write a file: %w", err)
+			}
 		}
-		if err = composite.CreateLink(analyzerTypes, "", filePath, tmpFilePath); err != nil {
-			return xerrors.Errorf("failed to write a file: %w", err)
-		}
-
 		return nil
 	})
 	if err != nil {
@@ -307,12 +335,12 @@ func (a Artifact) inspectLayer(ctx context.Context, layerInfo LayerInfo, disable
 
 	// Wait for all the goroutine to finish.
 	wg.Wait()
-
-	// Post-analysis
-	if err = a.analyzer.PostAnalyze(ctx, composite, result, opts); err != nil {
-		return types.BlobInfo{}, xerrors.Errorf("post analysis error: %w", err)
+	if a.artifactOption.SkScan {
+		// Post-analysis
+		if err = a.analyzer.PostAnalyze(ctx, composite, result, opts); err != nil {
+			return types.BlobInfo{}, xerrors.Errorf("post analysis error: %w", err)
+		}
 	}
-
 	// Sort the analysis result for consistent results
 	result.Sort()
 
