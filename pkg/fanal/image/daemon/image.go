@@ -142,11 +142,11 @@ func (img *image) configFile() (*v1.ConfigFile, error) {
 	return img.Image.ConfigFile()
 }
 
-func (img *image) LayerByDiffID(h v1.Hash) (v1.Layer, error) {
+func (img *image) LayerByDiffID(h v1.Hash, f map[string]string, digest map[string]string) (v1.Layer, error) {
 	if err := img.populateImage(); err != nil {
 		return nil, xerrors.Errorf("unable to populate: %w", err)
 	}
-	return img.Image.LayerByDiffID(h)
+	return img.Image.LayerByDiffID(h, nil, nil)
 }
 
 func (img *image) RawConfigFile() ([]byte, error) {

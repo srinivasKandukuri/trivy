@@ -204,6 +204,8 @@ type ArtifactReference struct {
 
 	// SBOM
 	CycloneDX *CycloneDX
+	F         map[string]string
+	D         map[string]string
 }
 
 type ImageMetadata struct {

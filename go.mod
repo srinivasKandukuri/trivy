@@ -2,6 +2,10 @@ module github.com/aquasecurity/trivy
 
 go 1.19
 
+replace (
+	github.com/google/go-containerregistry  => /home/sk/go/src/bitbucket.org/go-containerregistry-0.15.2
+)
+
 require (
 	github.com/Azure/azure-sdk-for-go v68.0.0+incompatible
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.6.0

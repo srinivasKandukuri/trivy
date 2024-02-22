@@ -14,6 +14,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aquasecurity/trivy/pkg/fanal/analyzer"
 	"github.com/aquasecurity/trivy/pkg/fanal/artifact"
@@ -35,6 +36,8 @@ type Artifact struct {
 	handlerManager handler.Manager
 
 	artifactOption artifact.Option
+	ArtifactDiff   map[string]string
+	ArtifactDigest map[string]string
 }
 
 const EmptyLayer = "sha256:a3ed95caeb02ffe68cdd9fd84406680ae93d633cb16422d00e8a7c22955b46d4"
@@ -45,13 +48,16 @@ type LayerInfo struct {
 	CreatedBy string // can be empty
 }
 
-func NewArtifact(img types.Image, c cache.ArtifactCache, opt artifact.Option) (artifact.Artifact, error) {
+func NewArtifact(img types.Image, c cache.ArtifactCache, opt artifact.Option, f map[string]string, d map[string]string) (artifact.Artifact, error) {
 	// Initialize handlers
 	handlerManager, err := handler.NewManager(opt)
+	if f == nil {
+		f = make(map[string]string)
+		d = make(map[string]string)
+	}
 	if err != nil {
 		return nil, xerrors.Errorf("handler init error: %w", err)
 	}
-
 	a, err := analyzer.NewAnalyzerGroup(analyzer.AnalyzerOptions{
 		Group:                opt.AnalyzerGroup,
 		Parallel:             opt.Parallel,
@@ -84,6 +90,8 @@ func NewArtifact(img types.Image, c cache.ArtifactCache, opt artifact.Option) (a
 		handlerManager: handlerManager,
 
 		artifactOption: opt,
+		ArtifactDigest: d,
+		ArtifactDiff:   f,
 	}, nil
 }
 
@@ -164,6 +172,8 @@ func (a Artifact) Inspect(ctx context.Context) (types.ArtifactReference, error) 
 			RepoDigests: a.image.RepoDigests(),
 			ConfigFile:  *configFile,
 		},
+		F: a.ArtifactDiff,
+		D: a.ArtifactDigest,
 	}, nil
 }
 
@@ -244,12 +254,11 @@ func (a Artifact) inspect(ctx context.Context, missingImage string, layerKeys, b
 			disabledAnalyzers = append(disabledAnalyzers, analyzer.TypeSecret)
 		}
 
+		layerInfo, err := a.inspectLayer(ctx, layer, disabledAnalyzers)
+		if err != nil {
+			return nil, xerrors.Errorf("failed to analyze layer (%s): %w", layer.DiffID, err)
+		}
 		if a.artifactOption.SkScan {
-			layerInfo, err := a.inspectLayer(ctx, layer, disabledAnalyzers)
-			if err != nil {
-				return nil, xerrors.Errorf("failed to analyze layer (%s): %w", layer.DiffID, err)
-			}
-
 			if err = a.cache.PutBlob(layerKey, layerInfo); err != nil {
 				return nil, xerrors.Errorf("failed to store layer: %s in cache: %w", layerKey, err)
 			}
@@ -257,8 +266,6 @@ func (a Artifact) inspect(ctx context.Context, missingImage string, layerKeys, b
 			if lo.IsNotEmpty(layerInfo.OS) {
 				osFound = layerInfo.OS
 			}
-		} else {
-			fmt.Println("skipping inspectlayer :", layer.DiffID, ",  ", a.artifactOption.AnalyzerGroup, ", Image :", a.image.Name())
 		}
 		return nil, nil
 
@@ -280,8 +287,9 @@ func (a Artifact) inspect(ctx context.Context, missingImage string, layerKeys, b
 
 func (a Artifact) inspectLayer(ctx context.Context, layerInfo LayerInfo, disabled []analyzer.Type) (types.BlobInfo, error) {
 	log.Logger.Debugf("Missing diff ID in cache: %s", layerInfo.DiffID)
-
+	tm := time.Now()
 	layerDigest, rc, err := a.uncompressedLayer(layerInfo.DiffID)
+	fmt.Println(layerInfo.DiffID, " : sk-log-Group :", a.artifactOption.AnalyzerGroup, ", Image :", a.image.Name(), ": UncompressLayer --", time.Since(tm).Seconds())
 	if err != nil {
 		return types.BlobInfo{}, xerrors.Errorf("unable to get uncompressed layer %s: %w", layerInfo.DiffID, err)
 	}
@@ -383,12 +391,18 @@ func (a Artifact) diffIDs(configFile *v1.ConfigFile) []string {
 
 func (a Artifact) uncompressedLayer(diffID string) (string, io.ReadCloser, error) {
 	// diffID is a hash of the uncompressed layer
+	d := time.Now()
+
 	h, err := v1.NewHash(diffID)
+	fmt.Println(diffID, " : sk-log-Group :", a.artifactOption.AnalyzerGroup, ", Image :", a.image.Name(), ": NewHash --", time.Since(d).Seconds())
 	if err != nil {
 		return "", nil, xerrors.Errorf("invalid layer ID (%s): %w", diffID, err)
 	}
+	b := time.Now()
 
-	layer, err := a.image.LayerByDiffID(h)
+	layer, err := a.image.LayerByDiffID(h, a.ArtifactDiff, a.ArtifactDigest)
+
+	fmt.Println(diffID, " : sk-log-Group :", a.artifactOption.AnalyzerGroup, ", Image :", a.image.Name(), ": LayerByDiffID --", time.Since(b).Seconds())
 	if err != nil {
 		return "", nil, xerrors.Errorf("failed to get the layer (%s): %w", diffID, err)
 	}
@@ -402,10 +416,22 @@ func (a Artifact) uncompressedLayer(diffID string) (string, io.ReadCloser, error
 		}
 		digest = d.String()
 	}
-
+	c := time.Now()
 	rc, err := layer.Uncompressed()
+	fmt.Println(diffID, " : sk-log-Group :", a.artifactOption.AnalyzerGroup, ", Image :", a.image.Name(), ": Uncompressed --", time.Since(c).Seconds())
 	if err != nil {
 		return "", nil, xerrors.Errorf("failed to get the layer content (%s): %w", diffID, err)
+	}
+	if a.artifactOption.AnalyzerGroup != "aqua-analyzers" {
+		a.ArtifactDigest[h.String()] = digest
+	}
+
+	if a.artifactOption.AnalyzerGroup != "aqua-analyzers" {
+		var s sync.Mutex
+		s.Lock()
+		a.ArtifactDigest[h.String()] = digest
+		a.ArtifactDiff[h.String()] = diffID
+		s.Unlock()
 	}
 	return digest, rc, nil
 }
